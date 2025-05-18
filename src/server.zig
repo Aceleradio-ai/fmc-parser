@@ -1,4 +1,5 @@
 const std = @import("std");
+const Parser = @import("teltonika/parser.zig").Parser;
 const TeltonikaData = @import("model/teltonika_data.zig").TeltonikaData;
 const ImeiHandler = @import("teltonika/imei_handler.zig").ImeiHandler;
 const isValidChecksum = @import("teltonika/validate_checksum.zig").isValidChecksum;
@@ -127,7 +128,7 @@ pub const TcpServer = struct {
             std.log.err("Packet read error: {}", .{err});
             return;
         };
-        const packet_data = packet_buffer[0..packet_bytes_read];
+        var packet_data = packet_buffer[0..packet_bytes_read];
 
         if (packet_data.len == 0) {
             std.log.warn("Received empty packet data. Ignoring...", .{});
@@ -139,11 +140,18 @@ pub const TcpServer = struct {
             return;
         }
 
-        handler(packet_data, conn_allocator);
+        const teltonika_data = Parser.init(&packet_data, imei, conn_allocator) catch |err| {
+            std.log.err("Parser error: {}", .{err});
+            return;
+        };
+
+        handler(teltonika_data, conn_allocator);
     }
 };
 
 pub fn defaultHandler(teltonika_data: anytype, allocator: std.mem.Allocator) void {
+    // defer teltonika_data.deinit(allocator);
+
     const json_string = std.json.stringifyAlloc(allocator, teltonika_data, .{ .emit_null_optional_fields = false }) catch |err| {
         std.log.err("Error stringifying JSON: {}", .{err});
         return;
