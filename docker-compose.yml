@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+  fmc-parser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4444:4444"
+    container_name: fmc-parser
+    restart: always
+    environment:
+      - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
+      - PUBSUB_TOPIC_ID=${PUBSUB_TOPIC_ID}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/service-account-key.json
+      - GODEBUG=x509ignoreCN=0
+      - GRPC_GO_DISABLE_TRACING=true
+    volumes:
+      - ./service-account-key.json:/app/service-account-key.json:ro
+      - ./.env:/app/.env

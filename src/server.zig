@@ -3,6 +3,11 @@ const Parser = @import("teltonika/parser.zig").Parser;
 const TeltonikaData = @import("model/teltonika_data.zig").TeltonikaData;
 const ImeiHandler = @import("teltonika/imei_handler.zig").ImeiHandler;
 const isValidChecksum = @import("teltonika/validate_checksum.zig").isValidChecksum;
+const c = @cImport({
+    @cInclude("/app/src/pubsub.h");
+});
+
+extern "c" fn PublishMessage(jsonStr: ?*const u8) u8;
 
 pub const TcpServer = struct {
     address: std.net.Address,
@@ -43,12 +48,12 @@ pub const TcpServer = struct {
         self.allocator.destroy(self.thread_pool);
     }
 
-    pub fn start(self: *TcpServer, comptime handler: fn (anytype, std.mem.Allocator) void) !void {
+    pub fn start(self: *TcpServer, comptime handler: fn (*TeltonikaData, std.mem.Allocator) void) !void {
         self.running = true;
         try self.thread_pool.spawn(acceptConnections, .{ self, handler });
     }
 
-    fn acceptConnections(self: *TcpServer, comptime handler: fn (anytype, std.mem.Allocator) void) void {
+    fn acceptConnections(self: *TcpServer, comptime handler: fn (*TeltonikaData, std.mem.Allocator) void) void {
         while (self.running) {
             self.connection_semaphore.wait();
             const conn = self.server.accept() catch |err| {
@@ -84,11 +89,11 @@ pub const TcpServer = struct {
                 return error.Timeout;
             }
 
-            std.time.sleep(100 * std.time.ns_per_ms);
+            std.time.sleep(1 * std.time.ns_per_ms);
         }
     }
 
-    fn handleConnection(self: *TcpServer, conn: std.net.Server.Connection, comptime handler: fn (anytype, std.mem.Allocator) void) void {
+    fn handleConnection(self: *TcpServer, conn: std.net.Server.Connection, comptime handler: fn (*TeltonikaData, std.mem.Allocator) void) void {
         defer {
             conn.stream.close();
             self.connection_semaphore.post();
@@ -101,7 +106,7 @@ pub const TcpServer = struct {
         std.log.info("New connection from {}", .{conn.address});
 
         var buffer: [1024]u8 = undefined;
-        const bytes_read = readWithTimeout(&conn.stream, &buffer, 5 * std.time.ns_per_s) catch |err| {
+        const bytes_read = readWithTimeout(&conn.stream, &buffer, 1 * std.time.ns_per_s) catch |err| {
             if (err == error.Timeout) {
                 std.log.warn("Timeout ao tentar ler do stream.", .{});
             } else {
@@ -124,7 +129,7 @@ pub const TcpServer = struct {
         conn.stream.writeAll(response) catch return;
 
         var packet_buffer: [2048]u8 = undefined;
-        const packet_bytes_read = readWithTimeout(&conn.stream, &packet_buffer, 10 * std.time.ns_per_s) catch |err| {
+        const packet_bytes_read = readWithTimeout(&conn.stream, &packet_buffer, 1 * std.time.ns_per_s) catch |err| {
             std.log.err("Packet read error: {}", .{err});
             return;
         };
@@ -140,19 +145,19 @@ pub const TcpServer = struct {
             return;
         }
 
-        const teltonika_data = Parser.init(&packet_data, imei, conn_allocator) catch |err| {
+        var teltonika_data = Parser.init(&packet_data, imei, conn_allocator) catch |err| {
             std.log.err("Parser error: {}", .{err});
             return;
         };
 
-        handler(teltonika_data, conn_allocator);
+        handler(&teltonika_data, conn_allocator);
     }
 };
 
-pub fn defaultHandler(teltonika_data: anytype, allocator: std.mem.Allocator) void {
-    // defer teltonika_data.deinit(allocator);
+pub fn defaultHandler(teltonika_data: *TeltonikaData, allocator: std.mem.Allocator) void {
+    defer teltonika_data.deinit(allocator);
 
-    const json_string = std.json.stringifyAlloc(allocator, teltonika_data, .{ .emit_null_optional_fields = false }) catch |err| {
+    const json_string = std.json.stringifyAlloc(allocator, teltonika_data.*, .{ .emit_null_optional_fields = false }) catch |err| {
         std.log.err("Error stringifying JSON: {}", .{err});
         return;
     };
@@ -168,4 +173,6 @@ pub fn defaultHandler(teltonika_data: anytype, allocator: std.mem.Allocator) voi
 
     @memcpy(c_json[0..json_string.len], json_string);
     c_json[json_string.len] = 0;
+
+    _ = PublishMessage(@ptrCast(c_json.ptr));
 }

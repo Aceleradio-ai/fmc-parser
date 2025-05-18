@@ -31,6 +31,7 @@ pub fn build(b: *std.Build) void {
     });
     exe.linkSystemLibrary("c");
     exe.addLibraryPath(b.path("./src/"));
+    exe.linkSystemLibrary("pubsub");
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
